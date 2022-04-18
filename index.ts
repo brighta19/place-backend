@@ -29,7 +29,7 @@ const io = new Server({ cors: { origin } });
 io.on("connection", (socket) => {
     console.log("New connection!");
 
-    socket.emit("all-tiles", [...tiles])
+    socket.emit("all-tiles", [...tiles]);
 
     socket.on("disconnect", () => {
         console.log("Socket disconnected.");
