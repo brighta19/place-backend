@@ -65,7 +65,7 @@ function init() {
 }
 
 function continueInit() {
-    setTimeout(() => writeToBackupFile(BACKUP_NAME), BACKUP_INTERVAL);
+    setInterval(() => writeToBackupFile(BACKUP_NAME), BACKUP_INTERVAL);
 
     const io = new Server({ cors: { origin: true } });
 
