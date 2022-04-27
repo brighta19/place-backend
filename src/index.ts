@@ -83,6 +83,8 @@ function continueInit() {
         });
 
         socket.on("place-tile", (data) => {
+            if (!verifyTileData(data)) return;
+
             let [ x, y, color ] = data;
             console.log(`New tile (x: ${x}, y: ${y})`);
             tiles.set([x, y].toString(), color);
@@ -92,6 +94,18 @@ function continueInit() {
 
     io.listen(PORT);
     console.log(`Started websocket server on port ${PORT}`);
+}
+
+function verifyTileData(data: any) {
+    return (
+        Array.isArray(data) &&
+        typeof data[0] === "number" &&
+        data[0] >= 0 && data[0] < cols &&
+        typeof data[1] === "number" &&
+        data[1] >= 0 && data[1] < rows &&
+        typeof data[2] === "number" &&
+        data[2] >= 0 && data[2] < NUM_OF_COLORS
+    );
 }
 
 async function writeToBackupFile(name: string) {
