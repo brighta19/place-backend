@@ -7,148 +7,180 @@ dotenv.config();
 const PORT = Number(process.env.PORT) || 3000;
 const BACKUP_INTERVAL = Number(process.env.BACKUP_INTERVAL) || 30000; // milliseconds
 const BACKUP_NAME = process.env.BACKUP_NAME || "tiles.backup.json";
+const NUM_OF_ROWS = Number(process.env.NUM_OF_ROWS) || 50;
+const NUM_OF_COLS = Number(process.env.NUM_OF_COLS) || 50;
 const NUM_OF_COLORS = 12;
 
 let rows: number;
 let cols: number;
-let tiles: Map<string, number>;
+let tiles: Map<TileLocation, TileColor>;
 
-function init() {
+function start() {
     fs.readFile(BACKUP_NAME)
-    .then((buffer: Buffer) => {
-        try {
-            let json = JSON.parse(buffer.toString());
+        .then((buffer: Buffer) => {
+            let json: any;
 
-            if (!readJsonAndSetup(json))
-                throw new Error("Invalid format in backup");
-            else
-                console.log(`Retrieved backup "${BACKUP_NAME}"`);
+            try {
+                json = JSON.parse(buffer.toString());
 
-            continueInit();
-        }
-        catch (err) {
-            console.error(err);
-            console.log(`An error has occurred while reading backup ${BACKUP_NAME}`);
-            console.log(`To continue, either correct it, or delete the backup.`);
-        }
-    })
-    .catch(async (err) => {
-        console.log(`Could not open backup named "${BACKUP_NAME}"`);
+                if (!validateCanvasJSON(json))
+                    throw new Error("Invalid format in backup");
+            }
+            catch (err) {
+                console.error(err);
+                console.error(
+                    `An error has occurred while reading backup file ${BACKUP_NAME}\n` +
+                    `To continue, either correct it, or delete the backup.`
+                );
+                return;
+            }
 
-        rows = Number(process.env.NUM_OF_ROWS) || 50;
-        cols = Number(process.env.NUM_OF_COLS) || 50;
-        tiles = new Map<string, number>();
+            const extractedTileData = extractCanvasData(json);
+            rows = extractedTileData.rows;
+            cols = extractedTileData.cols;
+            tiles = extractedTileData.tiles;
 
-        // AMOGUS
-        tiles.set("2,1", 7);
-        tiles.set("3,1", 7);
-        tiles.set("4,1", 7);
-        tiles.set("1,2", 7);
-        tiles.set("2,2", 7);
-        tiles.set("3,2", 8);
-        tiles.set("4,2", 8);
-        tiles.set("1,3", 7);
-        tiles.set("2,3", 7);
-        tiles.set("3,3", 7);
-        tiles.set("4,3", 7);
-        tiles.set("2,4", 7);
-        tiles.set("3,4", 7);
-        tiles.set("4,4", 7);
-        tiles.set("2,5", 7);
-        tiles.set("4,5", 7);
+            console.log(`Retrieved backup "${BACKUP_NAME}"`);
+        })
+        .catch(async (err) => {
+            console.log(`Could not open backup named "${BACKUP_NAME}"`);
 
-        if (await writeToBackupFile(BACKUP_NAME))
-            console.log("Created backup file");
+            rows = NUM_OF_ROWS;
+            cols = NUM_OF_COLS;
+            tiles = new Map<TileLocation, TileColor>();
 
-        continueInit();
-    });
+            drawAmogus();
+
+            const writeSuccessful = await writeToBackupFile(BACKUP_NAME);
+            if (writeSuccessful)
+                console.log("Created backup file");
+        })
+        .finally(() => {
+            setInterval(() => writeToBackupFile(BACKUP_NAME), BACKUP_INTERVAL);
+
+            const socketServer = new Server({ cors: { origin: true } });
+
+            socketServer.on("connection", (socket) => {
+                console.log("New connection!");
+
+                socket.emit("current-state", {
+                    num_of_rows: rows,
+                    num_of_cols: cols,
+                    tiles: [...tiles]
+                });
+
+                socket.on("disconnect", () => {
+                    console.log("Socket disconnected.");
+                });
+
+                socket.on("place-tile", (data) => {
+                    if (!verifyTileData(data)) return;
+
+                    let [ x, y, color ] = data;
+                    console.log(`New tile (x: ${x}, y: ${y})`);
+                    tiles.set([x, y].toString(), color);
+                    socket.broadcast.emit("new-tile", data);
+                });
+            });
+
+            socketServer.listen(PORT);
+            console.log(`Started websocket server on port ${PORT}`);
+        });
 }
 
-function continueInit() {
-    setInterval(() => writeToBackupFile(BACKUP_NAME), BACKUP_INTERVAL);
+function verifyTileData(data: any): boolean {
+    const LOCATION_X = 0;
+    const LOCATION_Y = 1;
+    const COLOR = 2;
 
-    const io = new Server({ cors: { origin: true } });
-
-    io.on("connection", (socket) => {
-        console.log("New connection!");
-
-        socket.emit("current-state", {
-            num_of_rows: rows,
-            num_of_cols: cols,
-            tiles: [...tiles]
-        });
-
-        socket.on("disconnect", () => {
-            console.log("Socket disconnected.");
-        });
-
-        socket.on("place-tile", (data) => {
-            if (!verifyTileData(data)) return;
-
-            let [ x, y, color ] = data;
-            console.log(`New tile (x: ${x}, y: ${y})`);
-            tiles.set([x, y].toString(), color);
-            socket.broadcast.emit("new-tile", data);
-        });
-    });
-
-    io.listen(PORT);
-    console.log(`Started websocket server on port ${PORT}`);
-}
-
-function verifyTileData(data: any) {
     return (
         Array.isArray(data) &&
-        typeof data[0] === "number" &&
-        data[0] >= 0 && data[0] < cols &&
-        typeof data[1] === "number" &&
-        data[1] >= 0 && data[1] < rows &&
-        typeof data[2] === "number" &&
-        data[2] >= 0 && data[2] < NUM_OF_COLORS
+        typeof data[LOCATION_X] === "number" &&
+        data[LOCATION_X] >= 0 && data[LOCATION_X] < cols &&
+        typeof data[LOCATION_Y] === "number" &&
+        data[LOCATION_Y] >= 0 && data[LOCATION_Y] < rows &&
+        typeof data[COLOR] === "number" &&
+        data[COLOR] >= 0 && data[COLOR] < NUM_OF_COLORS
     );
 }
 
-async function writeToBackupFile(name: string) {
+async function writeToBackupFile(name: string): Promise<boolean> {
     try {
-        await fs.writeFile(name, getCurrentState())
+        await fs.writeFile(name, getCanvasStateInJSON())
         return true;
     }
-    catch (_err) {
-        console.log("Couldn't write to backup file");
+    catch (err) {
+        console.log("Couldn't write to backup file", err);
         return false;
     }
 }
 
-function getCurrentState() {
+function getCanvasStateInJSON(): string {
     return JSON.stringify({
-        rows, cols,
+        rows,
+        cols,
         tiles: [...tiles]
     });
 }
 
-function readJsonAndSetup(json: any) {
-    if (typeof json !== "object" ||
+function validateCanvasJSON(json: any): boolean {
+    const LOCATION = 0;
+    const COLOR = 1;
+
+    if (
+        typeof json !== "object" ||
         typeof json["rows"] !== "number" ||
         typeof json["cols"] !== "number" ||
         !Array.isArray(json["tiles"])
     ) return false;
 
-    let _tiles = new Map<string, number>();
     for (let tile of json["tiles"]) {
-        if (!Array.isArray(tile) ||
-            typeof tile[0] !== "string" ||
-            !(/^\d+,\d+$/.test(tile[0])) ||
-            typeof tile[1] !== "number" ||
-            tile[1] < 0 || tile[1] >= NUM_OF_COLORS
+        if (
+            !Array.isArray(tile) ||
+            !isValidTileLocation(tile[LOCATION]) ||
+            !isValidTileColor(tile[COLOR])
         ) return false;
-
-        _tiles.set(tile[0], tile[1]);
     }
 
-    rows = json["rows"];
-    cols = json["cols"];
-    tiles = _tiles;
     return true;
 }
 
-init();
+function isValidTileLocation(location: any): boolean {
+    return typeof location === "string" &&
+        /^\d+,\d+$/.test(location);
+}
+
+function isValidTileColor(color: any): boolean {
+    return typeof color === "number" &&
+        color >= 0 && color < NUM_OF_COLORS;
+}
+
+function extractCanvasData(json: any): CanvasData {
+    return {
+        rows: json["rows"],
+        cols: json["cols"],
+        tiles: new Map<string, number>(json["tiles"])
+    }
+}
+
+function drawAmogus() {
+    tiles.set("2,1", 7);
+    tiles.set("3,1", 7);
+    tiles.set("4,1", 7);
+    tiles.set("1,2", 7);
+    tiles.set("2,2", 7);
+    tiles.set("3,2", 8);
+    tiles.set("4,2", 8);
+    tiles.set("1,3", 7);
+    tiles.set("2,3", 7);
+    tiles.set("3,3", 7);
+    tiles.set("4,3", 7);
+    tiles.set("2,4", 7);
+    tiles.set("3,4", 7);
+    tiles.set("4,4", 7);
+    tiles.set("2,5", 7);
+    tiles.set("4,5", 7);
+}
+
+start();
+
